@@ -1,95 +1,61 @@
 'use strict';
 
-import { PART_CATALOG, createPart, getAABB } from './parts.js';
-
-/**
- * Manages rocket assembly and flight part transforms.
- */
 export class Rocket {
-  constructor() {
-    this.rocketParts = [createPart('command_pod', 0, 120, 2)];
+  constructor(rocketParts) {
+    this.parts = rocketParts;
     this.rootId = null;
   }
 
-  getParts() {
-    return this.rocketParts;
+  setRootFromPod() {
+    const pod = this.parts.find((p) => p.type === 'pod' && !p.removed);
+    this.rootId = pod ? pod.id : null;
+    return pod;
   }
 
-  setParts(parts) {
-    this.rocketParts = Array.isArray(parts) ? parts : [];
+  attachedParts() {
+    return this.parts.filter((p) => !p.removed && p.attached);
   }
 
-  reset() {
-    this.rocketParts = [createPart('command_pod', 0, 120, 2)];
-    this.rootId = null;
+  detachedParts() {
+    return this.parts.filter((p) => !p.removed && !p.attached);
   }
 
-  serialize() {
-    return JSON.stringify(this.rocketParts);
-  }
-
-  deserialize(raw) {
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return false;
-    this.rocketParts = parsed;
-    return true;
-  }
-
-  initializeFlight() {
-    const pod = this.rocketParts.find((p) => p.type === 'command_pod' && p.active !== false);
-    if (!pod) return null;
-    this.rootId = pod.id;
-    this.rocketParts.forEach((p) => {
-      p.active = p.active !== false;
-      p.separated = Boolean(p.separated);
-      p.engineActive = PART_CATALOG[p.type].thrust > 0 ? p.stage === 0 : false;
-      p.localOffsetX = p.x - pod.x;
-      p.localOffsetY = p.y - pod.y;
-      p.vx = p.vx || 0;
-      p.vy = p.vy || 0;
-    });
-    return { x: pod.x, y: pod.y };
-  }
-
-  getConnectedAssembly() {
-    return this.rocketParts.filter((p) => p.active && !p.separated);
-  }
-
-  getDetachedParts() {
-    return this.rocketParts.filter((p) => p.active && p.separated);
-  }
-
-  computeCOM(parts = this.getConnectedAssembly()) {
+  computeCOM(parts = this.attachedParts()) {
     let mx = 0;
     let my = 0;
-    let tm = 0;
+    let total = 0;
     for (const p of parts) {
       const m = p.mass + p.fuel * 0.8;
       mx += p.x * m;
       my += p.y * m;
-      tm += m;
+      total += m;
     }
-    return tm > 0 ? { x: mx / tm, y: my / tm, mass: tm } : { x: 0, y: 0, mass: 0 };
+    return total > 0 ? { x: mx / total, y: my / total, mass: total } : { x: 0, y: 0, mass: 0 };
   }
 
-  getAssemblyAABB(parts = this.getConnectedAssembly()) {
+  computeCOT(parts = this.attachedParts()) {
+    let tx = 0;
+    let ty = 0;
+    let thrust = 0;
+    for (const p of parts) {
+      if (p.thrust > 0 && p.active) {
+        tx += p.x * p.thrust;
+        ty += p.y * p.thrust;
+        thrust += p.thrust;
+      }
+    }
+    return thrust > 0 ? { x: tx / thrust, y: ty / thrust } : null;
+  }
+
+  bounds(parts = this.attachedParts()) {
     if (!parts.length) return null;
     let left = Infinity, right = -Infinity, top = Infinity, bottom = -Infinity;
     for (const p of parts) {
-      const b = getAABB(p);
-      left = Math.min(left, b.left);
-      right = Math.max(right, b.right);
-      top = Math.min(top, b.top);
-      bottom = Math.max(bottom, b.bottom);
+      left = Math.min(left, p.x - p.width / 2);
+      right = Math.max(right, p.x + p.width / 2);
+      top = Math.min(top, p.y - p.height / 2);
+      bottom = Math.max(bottom, p.y + p.height / 2);
     }
     return { left, right, top, bottom };
-  }
-
-  applyAssemblyTransform(rootX, rootY) {
-    const parts = this.getConnectedAssembly();
-    for (const p of parts) {
-      p.x = rootX + (p.localOffsetX || 0);
-      p.y = rootY + (p.localOffsetY || 0);
-    }
   }
 }

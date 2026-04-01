@@ -1,17 +1,14 @@
 'use strict';
 
-import { PART_CATALOG } from './parts.js';
-import { GameState } from './stateManager.js';
+import { GRID_SIZE, PART_DEFINITIONS } from './parts.js';
 
-/**
- * Canvas renderer with layered drawing.
- */
 export class Renderer {
-  /** @param {HTMLCanvasElement} canvas */
-  constructor(canvas) {
+  constructor(canvas, hudTelemetryEl) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d');
-    this.particles = Array.from({ length: 500 }, () => ({ active: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, color: '#fff', size: 2 }));
+    this.hudTelemetryEl = hudTelemetryEl;
+    this.camera = { x: 0, y: 0, zoom: 1 };
+    this.particles = [];
     this.resize();
     window.addEventListener('resize', () => this.resize());
   }
@@ -23,156 +20,84 @@ export class Renderer {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  emitParticles(x, y, count, color, speed = 60) {
-    for (let i = 0; i < count; i++) {
-      const p = this.particles.find((particle) => !particle.active);
-      if (!p) return;
-      const a = Math.random() * Math.PI * 2;
-      const s = speed * (0.5 + Math.random());
-      Object.assign(p, { active: true, x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.8 + Math.random(), color, size: 1 + Math.random() * 3 });
-    }
-  }
-
-  updateParticles(dt) {
-    for (const p of this.particles) {
-      if (!p.active) continue;
-      p.life -= dt;
-      if (p.life <= 0) {
-        p.active = false;
-        continue;
-      }
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-      p.vy -= 12 * dt;
-    }
-  }
-
-  drawPartSprite(ctx, part) {
-    const d = PART_CATALOG[part.type];
+  drawPart(part, ghost = false) {
+    const ctx = this.ctx;
+    const def = PART_DEFINITIONS[part.type];
     ctx.save();
     ctx.translate(part.x, part.y);
     ctx.rotate(part.rotation || 0);
-    ctx.fillStyle = d.color;
-    ctx.strokeStyle = '#0d1222';
-    ctx.lineWidth = 1;
-    if (part.type === 'nose_cone') {
+    ctx.fillStyle = ghost ? (part.ghostValid ? '#58ff8a' : '#ff5c5c') : def.color;
+    if (part.type === 'nose') {
       ctx.beginPath();
-      ctx.moveTo(0, -d.height / 2);
-      ctx.lineTo(-d.width / 2, d.height / 2);
-      ctx.lineTo(d.width / 2, d.height / 2);
+      ctx.moveTo(0, -def.height / 2);
+      ctx.lineTo(-def.width / 2, def.height / 2);
+      ctx.lineTo(def.width / 2, def.height / 2);
       ctx.closePath();
       ctx.fill();
-      ctx.stroke();
     } else {
-      ctx.fillRect(-d.width / 2, -d.height / 2, d.width, d.height);
-      ctx.strokeRect(-d.width / 2, -d.height / 2, d.width, d.height);
+      ctx.fillRect(-def.width / 2, -def.height / 2, def.width, def.height);
     }
     ctx.restore();
   }
 
-  drawGrid(ctx, camera) {
-    const gs = 10;
-    const w = this.canvas.clientWidth;
-    const h = this.canvas.clientHeight;
-    const startX = -camera.panX / camera.zoom;
-    const startY = -camera.panY / camera.zoom;
-    const endX = startX + w / camera.zoom;
-    const endY = startY + h / camera.zoom;
-    ctx.strokeStyle = 'rgba(80,120,200,0.15)';
-    ctx.lineWidth = 1 / camera.zoom;
-    ctx.beginPath();
-    for (let x = Math.floor(startX / gs) * gs; x <= endX; x += gs) { ctx.moveTo(x, startY); ctx.lineTo(x, endY); }
-    for (let y = Math.floor(startY / gs) * gs; y <= endY; y += gs) { ctx.moveTo(startX, y); ctx.lineTo(endX, y); }
-    ctx.stroke();
-  }
-
-  drawTrajectory(ctx, sim) {
-    ctx.save();
-    ctx.strokeStyle = 'rgba(90,220,255,0.8)';
-    ctx.setLineDash([4, 6]);
-    ctx.beginPath();
-    let x = sim.state.x;
-    let y = sim.state.y;
-    let vx = sim.state.vx;
-    let vy = sim.state.vy;
-    const dt = 1;
-    for (let i = 0; i < 120; i++) {
-      vy -= sim.planet.surfaceGravity * dt;
-      x += vx * dt;
-      y += vy * dt;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-      if (y < sim.groundHeightAt(x)) break;
-    }
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  render({ camera, rocketParts, sim, gameState, ghostPart, com, cot, mode }) {
+  renderBuildMode(rocketParts, dragGhost) {
     const ctx = this.ctx;
-    const w = this.canvas.clientWidth;
-    const h = this.canvas.clientHeight;
-    ctx.clearRect(0, 0, w, h);
-
-    // background
-    ctx.fillStyle = '#050814';
-    ctx.fillRect(0, 0, w, h);
-    ctx.fillStyle = '#cfe5ff';
-    for (let i = 0; i < 80; i++) {
-      ctx.fillRect((i * 83) % w, (i * 47) % h, 1, 1);
-    }
-
+    ctx.clearRect(0, 0, this.canvas.clientWidth, this.canvas.clientHeight);
+    ctx.fillStyle = '#070d1a';
+    ctx.fillRect(0, 0, this.canvas.clientWidth, this.canvas.clientHeight);
     ctx.save();
-    ctx.translate(camera.panX, camera.panY);
-    ctx.scale(camera.zoom, camera.zoom);
-
-    if (mode === GameState.BUILD_MODE) {
-      this.drawGrid(ctx, camera);
-    }
-
-    // terrain
-    ctx.fillStyle = '#385036';
+    ctx.translate(this.camera.x, this.camera.y);
+    ctx.scale(this.camera.zoom, this.camera.zoom);
+    ctx.strokeStyle = 'rgba(120,160,230,0.2)';
+    ctx.lineWidth = 1 / this.camera.zoom;
     ctx.beginPath();
-    const startX = (-camera.panX / camera.zoom) - 300;
-    const endX = startX + w / camera.zoom + 600;
-    ctx.moveTo(startX, sim.groundHeightAt(startX));
-    for (let x = startX; x <= endX; x += 40) {
-      ctx.lineTo(x, sim.groundHeightAt(x));
-    }
-    ctx.lineTo(endX, -2000);
-    ctx.lineTo(startX, -2000);
-    ctx.closePath();
-    ctx.fill();
-
-    if (mode !== GameState.BUILD_MODE) {
-      this.drawTrajectory(ctx, sim);
-    }
-
-    rocketParts
-      .filter((p) => p.active)
-      .sort((a, b) => a.stage - b.stage)
-      .forEach((part) => this.drawPartSprite(ctx, part));
-
-    if (ghostPart) {
-      ctx.globalAlpha = ghostPart.ghostOpacity ?? 0.5;
-      this.drawPartSprite(ctx, ghostPart);
+    const sx = -this.camera.x / this.camera.zoom;
+    const sy = -this.camera.y / this.camera.zoom;
+    const ex = sx + this.canvas.clientWidth / this.camera.zoom;
+    const ey = sy + this.canvas.clientHeight / this.camera.zoom;
+    for (let x = Math.floor(sx / GRID_SIZE) * GRID_SIZE; x <= ex; x += GRID_SIZE) { ctx.moveTo(x, sy); ctx.lineTo(x, ey); }
+    for (let y = Math.floor(sy / GRID_SIZE) * GRID_SIZE; y <= ey; y += GRID_SIZE) { ctx.moveTo(sx, y); ctx.lineTo(ex, y); }
+    ctx.stroke();
+    rocketParts.filter((p) => !p.removed).forEach((p) => this.drawPart(p));
+    if (dragGhost) {
+      ctx.globalAlpha = 0.5;
+      this.drawPart(dragGhost, true);
       ctx.globalAlpha = 1;
     }
-
-    if (com) {
-      ctx.fillStyle = '#ff5b5b';
-      ctx.beginPath(); ctx.arc(com.x, com.y, 6, 0, Math.PI * 2); ctx.fill();
-    }
-    if (cot) {
-      ctx.fillStyle = '#5bff9d';
-      ctx.beginPath(); ctx.arc(cot.x, cot.y, 6, 0, Math.PI * 2); ctx.fill();
-    }
-
-    for (const p of this.particles) {
-      if (!p.active) continue;
-      ctx.fillStyle = p.color;
-      ctx.fillRect(p.x, p.y, p.size, p.size);
-    }
-
     ctx.restore();
+  }
+
+  renderFlightMode(rocketParts, camera, particles, flash) {
+    this.camera = camera;
+    const ctx = this.ctx;
+    ctx.clearRect(0, 0, this.canvas.clientWidth, this.canvas.clientHeight);
+    ctx.fillStyle = '#040816';
+    ctx.fillRect(0, 0, this.canvas.clientWidth, this.canvas.clientHeight);
+    ctx.fillStyle = '#cde0ff';
+    for (let i = 0; i < 80; i++) ctx.fillRect((i * 83 - camera.x * 0.05) % this.canvas.clientWidth, (i * 41 - camera.y * 0.05) % this.canvas.clientHeight, 1, 1);
+
+    ctx.save();
+    ctx.translate(camera.x, camera.y);
+    ctx.scale(camera.zoom, camera.zoom);
+
+    ctx.fillStyle = '#36573b';
+    ctx.fillRect(-10000, 1000, 20000, 3000);
+
+    rocketParts.filter((p) => !p.removed).forEach((p) => this.drawPart(p));
+
+    particles.forEach((p) => {
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x, p.y, 2, 2);
+    });
+
+    if (flash > 0) {
+      ctx.fillStyle = `rgba(255,255,255,${Math.min(1, flash * 5)})`;
+      ctx.fillRect(-10000, -10000, 20000, 20000);
+    }
+    ctx.restore();
+  }
+
+  renderUI(t) {
+    this.hudTelemetryEl.innerHTML = `Altitude: ${t.altitude.toFixed(1)} m<br>Velocity: H ${t.velocity.x.toFixed(1)} | V ${t.velocity.y.toFixed(1)} m/s<br>Acceleration: ${t.acceleration.toFixed(2)} m/s²<br>Mass: ${t.mass.toFixed(1)} kg<br>Fuel: ${t.fuel.toFixed(1)} L<br>TWR: ${t.twr.toFixed(2)}<br>Δv: ${t.deltaV.toFixed(0)} m/s<br>Apoapsis: ${(t.apoapsis || 0).toFixed(1)} m<br>Periapsis: ${(t.periapsis || 0).toFixed(1)} m`;
   }
 }

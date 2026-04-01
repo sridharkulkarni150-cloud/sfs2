@@ -3,12 +3,12 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Rocket Sandbox</title>
+  <title>2D Spaceflight Simulator</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <div id="app">
-    <aside id="palette" aria-label="Part palette"></aside>
+    <aside id="palette" aria-label="Part catalog"></aside>
     <main id="viewport">
       <canvas id="gameCanvas"></canvas>
       <section id="hud">
@@ -21,6 +21,7 @@
         <button id="saveBtn">Save</button>
         <button id="loadBtn">Load</button>
         <button id="stageBtn">Stage</button>
+        <button id="rcsBtn">RCS</button>
         <label>Throttle <input id="throttle" type="range" min="0" max="100" value="0" /></label>
       </section>
     </main>

@@ -1,21 +1,13 @@
-:root {
-  --bg: #0a1020;
-  --panel: #131d35;
-  --text: #e8f0ff;
-  --accent: #66d6ff;
-}
-* { box-sizing: border-box; }
-body { margin: 0; font-family: Inter, Arial, sans-serif; background: var(--bg); color: var(--text); }
-#app { display: grid; grid-template-columns: 300px 1fr; min-height: 100vh; }
-#palette { background: var(--panel); border-right: 1px solid #2b395f; padding: 12px; overflow: auto; }
-.part-card { border: 1px solid #30466f; border-radius: 8px; padding: 8px; margin-bottom: 8px; cursor: pointer; background: #1b2745; }
-.part-card:hover { border-color: var(--accent); }
-#viewport { position: relative; }
-#gameCanvas { width: 100%; height: 100vh; display: block; }
-#hud, #controls { position: absolute; left: 12px; background: rgba(10, 15, 28, 0.86); border: 1px solid #2a3d66; border-radius: 8px; padding: 10px; }
-#hud { top: 12px; min-width: 320px; }
-#controls { bottom: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.mode-BUILD_MODE { color: #ffd166; }
-.mode-FLIGHT_MODE, .mode-ORBIT { color: #59ff9d; }
-.mode-CRASHED { color: #ff6767; }
-@media (max-width: 1280px) { #app { grid-template-columns: 250px 1fr; } }
+:root { --bg:#0b1020; --panel:#131d35; --text:#e8f0ff; --accent:#66d6ff; }
+*{box-sizing:border-box}
+body{margin:0;font-family:Inter,Arial,sans-serif;background:var(--bg);color:var(--text)}
+#app{display:flex;min-height:100vh}
+#palette{width:200px;background:var(--panel);border-right:1px solid #2b395f;padding:10px;overflow:auto}
+.part-card{border:1px solid #30466f;border-radius:8px;padding:8px;margin-bottom:8px;cursor:pointer;background:#1b2745}
+.part-card:hover{border-color:var(--accent)}
+#viewport{position:relative;flex:1}
+#gameCanvas{width:100%;height:100vh;display:block}
+#hud,#controls{position:absolute;left:12px;background:rgba(10,15,28,.86);border:1px solid #2a3d66;border-radius:8px;padding:10px}
+#hud{top:12px;min-width:300px}
+#controls{bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.mode-BUILD_MODE{color:#ffd166}.mode-FLIGHT_MODE{color:#59ff9d}.mode-CRASHED{color:#ff6767}.mode-PAUSED{color:#d5a8ff}

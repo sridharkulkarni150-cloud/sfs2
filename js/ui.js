@@ -45,7 +45,7 @@ export class UI {
   }
 
   updateTelemetry(sim) {
-    const alt = sim.state.y - sim.groundHeightAt(sim.state.x);
+    const alt = sim.groundHeightAt(sim.state.x) - sim.state.y;
     this.telemetry.innerHTML = `Altitude: ${alt.toFixed(1)} m<br>Velocity: H ${sim.state.vx.toFixed(1)} | V ${sim.state.vy.toFixed(1)} m/s<br>Accel: ${Math.hypot(sim.state.ax, sim.state.ay).toFixed(2)} m/s²<br>G-force: ${sim.state.gForce.toFixed(2)} g<br>Apoapsis: ${sim.state.apoapsis.toFixed(0)} m | Periapsis: ${sim.state.periapsis.toFixed(0)} m`;
   }
 

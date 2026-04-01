@@ -148,12 +148,12 @@ export class Renderer {
     }
 
     rocketParts
-      .filter((p) => p.active && !p.separated)
+      .filter((p) => p.active)
       .sort((a, b) => a.stage - b.stage)
       .forEach((part) => this.drawPartSprite(ctx, part));
 
     if (ghostPart) {
-      ctx.globalAlpha = 0.5;
+      ctx.globalAlpha = ghostPart.ghostOpacity ?? 0.5;
       this.drawPartSprite(ctx, ghostPart);
       ctx.globalAlpha = 1;
     }

@@ -1,147 +1,215 @@
 'use strict';
 
-import { BuildSystem } from './buildSystem.js';
-import { CameraController } from './camera.js';
-import { emit, on } from './events.js';
-import { PART_CATALOG } from './parts.js';
-import { PhysicsEngine } from './physicsEngine.js';
-import { Renderer } from './renderer.js';
-import { Rocket } from './rocket.js';
-import { StageController } from './staging.js';
+import { Assembly } from './build/assembly.js';
+import { PART_CATALOG } from './build/parts.js';
+import { screenToWorld } from './build/grid.js';
+import { RocketPhysics } from './physics/rocketPhysics.js';
+import { altitude, groundY } from './physics/world.js';
+import { Camera } from './render/camera.js';
+import { setupCanvas } from './render/canvas.js';
+import { drawPart } from './render/parts.js';
 import { GameState, StateManager } from './stateManager.js';
-import { UI } from './ui.js';
+import { BuildUI } from './ui/buildUI.js';
+import { bindControls } from './ui/controls.js';
+import { renderTelemetry } from './ui/telemetry.js';
 
 const canvas = document.getElementById('gameCanvas');
-const renderer = new Renderer(canvas);
-const ui = new UI();
-const physics = new PhysicsEngine();
-const rocket = new Rocket();
-const build = new BuildSystem(canvas);
-const camera = new CameraController();
-const stages = new StageController();
-const stateManager = StateManager.instance();
+const { ctx } = setupCanvas(canvas);
+const state = new StateManager();
+const assembly = new Assembly();
+const physics = new RocketPhysics();
+const camera = new Camera();
+const buildUI = new BuildUI(document.getElementById('palette'));
+const telemetryEl = document.getElementById('telemetry');
+const modeEl = document.getElementById('modeIndicator');
+const particles = [];
+let currentStage = 0;
 
 camera.bind(canvas);
-let ghostPart = null;
-let lastFrame = performance.now();
+buildUI.initPalette();
 
-function calculateCOT(parts) {
-  let tx = 0, ty = 0, tt = 0;
-  for (const p of parts) {
-    const d = PART_CATALOG[p.type];
-    if (d.thrust > 0 && p.engineActive) {
-      tx += p.x * d.thrust;
-      ty += p.y * d.thrust;
-      tt += d.thrust;
-    }
-  }
-  return tt > 0 ? { x: tx / tt, y: ty / tt } : null;
-}
-
-function saveRocket() {
-  localStorage.setItem('rocket-save', rocket.serialize());
-}
-
-function loadRocket() {
-  const raw = localStorage.getItem('rocket-save');
-  if (!raw) return;
-  rocket.deserialize(raw);
+function setMode(next) {
+  state.set(next);
+  modeEl.textContent = next.replace('_MODE', '');
+  modeEl.className = `mode-${next}`;
 }
 
 function launch() {
-  const parts = rocket.getParts();
-  if (!build.validateConnectivity(parts)) {
-    alert('All parts must connect to command pod before launch.');
+  if (!assembly.validateConnectivity()) {
+    alert('Rocket must be connected to command pod.');
     return;
   }
-  const start = rocket.initializeFlight();
-  if (!start) return;
-  physics.state.x = start.x;
-  physics.state.y = start.y;
-  physics.state.vx = 0;
-  physics.state.vy = 0;
-  stateManager.setState(GameState.FLIGHT_MODE);
+  const root = assembly.setupRigidOffsets();
+  physics.body.x = root.x;
+  physics.body.y = root.y;
+  physics.body.vx = 0;
+  physics.body.vy = 0;
   camera.follow = true;
+  currentStage = 0;
+  setMode(GameState.FLIGHT_MODE);
 }
 
-ui.initPalette((type) => { build.dragType = type; });
-ui.bindShortcuts(() => stages.fire(rocket.getParts()), () => camera.autoCenter(canvas, physics.state.x, physics.state.y), (delta) => {
-  const value = Math.max(0, Math.min(100, Number(ui.throttle.value) + delta));
-  ui.throttle.value = String(value);
-  physics.state.throttle = value / 100;
+function stage() {
+  const staged = assembly.parts.filter((p) => p.active && !p.separated && p.stage === currentStage);
+  staged.forEach((p) => {
+    p.separated = true;
+    p.vx = physics.body.vx;
+    p.vy = physics.body.vy + 3;
+    p.engineActive = false;
+  });
+  currentStage += 1;
+  assembly.parts.filter((p) => p.active && !p.separated && p.stage === currentStage).forEach((p) => {
+    if (PART_CATALOG[p.type].thrust > 0) p.engineActive = true;
+  });
+}
+
+bindControls({
+  launchBtn: document.getElementById('launchBtn'),
+  resetBtn: document.getElementById('resetBtn'),
+  saveBtn: document.getElementById('saveBtn'),
+  loadBtn: document.getElementById('loadBtn'),
+  stageBtn: document.getElementById('stageBtn'),
+  throttle: document.getElementById('throttle')
+}, {
+  onLaunch: launch,
+  onReset: () => { assembly.reset(); setMode(GameState.BUILD_MODE); physics.throttle = 0; camera.follow = false; },
+  onSave: () => localStorage.setItem('rocket-save', assembly.serialize()),
+  onLoad: () => { const raw = localStorage.getItem('rocket-save'); if (raw) assembly.deserialize(raw); },
+  onStage: stage,
+  onThrottle: (v) => { physics.throttle = v; },
+  onThrottleDelta: (delta) => {
+    const input = document.getElementById('throttle');
+    const value = Math.max(0, Math.min(100, Number(input.value) + delta));
+    input.value = String(value);
+    physics.throttle = value / 100;
+  },
+  onCenter: () => { camera.x = -physics.body.x * camera.zoom + canvas.clientWidth * 0.5; camera.y = -physics.body.y * camera.zoom + canvas.clientHeight * 0.6; }
 });
 
 canvas.addEventListener('mousemove', (e) => {
-  if (!build.dragType || stateManager.state !== GameState.BUILD_MODE) {
-    ghostPart = null;
-    return;
+  if (state.state !== GameState.BUILD_MODE) return;
+  const w = screenToWorld(e.clientX, e.clientY, camera, canvas);
+  const preview = { ...w, type: buildUI.selectedType, rotation: 0, stage: 0 };
+  let valid = Boolean(buildUI.selectedType);
+  if (buildUI.selectedType) {
+    const d = PART_CATALOG[buildUI.selectedType];
+    const candidate = { ...preview, x: Math.round(w.x / 10) * 10, y: Math.round(w.y / 10) * 10, mass: d.mass, fuel: d.fuelCapacity, connections: [], active: true, separated: false };
+    valid = !assembly.parts.some((p) => {
+      const a = { left: p.x - PART_CATALOG[p.type].width / 2, right: p.x + PART_CATALOG[p.type].width / 2, top: p.y - PART_CATALOG[p.type].height / 2, bottom: p.y + PART_CATALOG[p.type].height / 2 };
+      const b = { left: candidate.x - d.width / 2, right: candidate.x + d.width / 2, top: candidate.y - d.height / 2, bottom: candidate.y + d.height / 2 };
+      return !(b.right <= a.left || b.left >= a.right || b.bottom <= a.top || b.top >= a.bottom);
+    });
   }
-  const w = build.worldFromEvent(e, camera);
-  const sx = build.snap(w.x);
-  const sy = build.snap(w.y);
-  const snapped = Math.abs(sx - w.x) < 5 && Math.abs(sy - w.y) < 5;
-  ghostPart = build.createDragGhost(build.dragType, sx, sy, snapped);
+  buildUI.updateGhost(w.x, w.y, valid);
 });
 
 canvas.addEventListener('click', (e) => {
-  if (!build.dragType || stateManager.state !== GameState.BUILD_MODE) return;
-  const w = build.worldFromEvent(e, camera);
-  const result = build.placePart(rocket.getParts(), build.dragType, w.x, w.y);
-  if (result.ok) {
-    ghostPart = null;
+  if (state.state !== GameState.BUILD_MODE || !buildUI.selectedType) return;
+  const w = screenToWorld(e.clientX, e.clientY, camera, canvas);
+  if (assembly.place(buildUI.selectedType, w.x, w.y)) {
+    buildUI.selectedType = null;
+    buildUI.ghost = null;
   }
 });
 
-ui.launchBtn.addEventListener('click', launch);
-ui.resetBtn.addEventListener('click', () => {
-  rocket.reset();
-  stages.reset();
-  physics.state = { x: 0, y: 120, vx: 0, vy: 0, ax: 0, ay: 0, angle: 0, throttle: 0, gForce: 1, apoapsis: 0, periapsis: 0 };
-  stateManager.setState(GameState.BUILD_MODE);
-  camera.follow = false;
-});
-ui.saveBtn.addEventListener('click', saveRocket);
-ui.loadBtn.addEventListener('click', loadRocket);
-ui.stageBtn.addEventListener('click', () => stages.fire(rocket.getParts()));
-ui.throttle.addEventListener('input', () => { physics.state.throttle = Number(ui.throttle.value) / 100; });
+function emitExplosion(x, y) {
+  for (let i = 0; i < 120; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const s = 50 + Math.random() * 220;
+    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 1.4, color: '#ff7448' });
+  }
+}
 
-on('state-changed', (evt) => ui.setMode(evt.detail.next));
-on('stage-fired', () => {
-  rocket.getParts().filter((p) => PART_CATALOG[p.type].thrust > 0).forEach((p) => renderer.emitParticles(p.x, p.y + 20, 20, '#ff9955', 100));
-});
+function renderBackground() {
+  ctx.fillStyle = '#060b18';
+  ctx.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+  ctx.fillStyle = '#d7e7ff';
+  for (let i = 0; i < 90; i++) ctx.fillRect(((i * 97) % canvas.clientWidth) - camera.x * 0.05, ((i * 53) % canvas.clientHeight) - camera.y * 0.05, 1, 1);
+}
+
+function renderGrid() {
+  if (state.state !== GameState.BUILD_MODE) return;
+  ctx.strokeStyle = 'rgba(120,160,230,0.18)';
+  ctx.lineWidth = 1 / camera.zoom;
+  ctx.beginPath();
+  const sx = -camera.x / camera.zoom;
+  const sy = -camera.y / camera.zoom;
+  const ex = sx + canvas.clientWidth / camera.zoom;
+  const ey = sy + canvas.clientHeight / camera.zoom;
+  for (let x = Math.floor(sx / 10) * 10; x <= ex; x += 10) { ctx.moveTo(x, sy); ctx.lineTo(x, ey); }
+  for (let y = Math.floor(sy / 10) * 10; y <= ey; y += 10) { ctx.moveTo(sx, y); ctx.lineTo(ex, y); }
+  ctx.stroke();
+}
+
+function renderWorld() {
+  ctx.save();
+  ctx.translate(camera.x, camera.y);
+  ctx.scale(camera.zoom, camera.zoom);
+  renderGrid();
+  ctx.fillStyle = '#35553a';
+  ctx.beginPath();
+  const left = -camera.x / camera.zoom - 100;
+  const right = left + canvas.clientWidth / camera.zoom + 200;
+  ctx.moveTo(left, groundY(left));
+  for (let x = left; x <= right; x += 25) ctx.lineTo(x, groundY(x));
+  ctx.lineTo(right, 2500);
+  ctx.lineTo(left, 2500);
+  ctx.closePath();
+  ctx.fill();
+
+  assembly.parts.filter((p) => p.active).forEach((p) => drawPart(ctx, p));
+  if (buildUI.ghost) {
+    ctx.globalAlpha = 0.5;
+    ctx.strokeStyle = buildUI.ghost.ghostColor;
+    drawPart(ctx, buildUI.ghost);
+    ctx.globalAlpha = 1;
+  }
+
+  particles.forEach((p) => {
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x, p.y, 2, 2);
+  });
+  ctx.restore();
+}
 
 function tick(now) {
-  const dt = Math.min(0.1, (now - lastFrame) / 1000);
-  lastFrame = now;
+  const attached = assembly.parts.filter((p) => p.active && !p.separated);
+  const detached = assembly.parts.filter((p) => p.active && p.separated);
 
-  if (stateManager.state === GameState.FLIGHT_MODE || stateManager.state === GameState.ORBIT) {
-    physics.update(now, rocket, (s) => stateManager.setState(s), (impact) => {
-      renderer.emitParticles(physics.state.x, physics.state.y, Math.min(220, Math.round(impact * 8)), '#ff663a', 180);
+  if (state.state === GameState.FLIGHT_MODE || state.state === GameState.ORBIT) {
+    physics.update(now, attached, detached, () => {
+      emitExplosion(physics.body.x, physics.body.y);
+      setMode(GameState.CRASHED);
     });
-    rocket.getParts().filter((p) => PART_CATALOG[p.type].thrust > 0 && p.engineActive && physics.state.throttle > 0 && !p.separated)
-      .forEach((p) => renderer.emitParticles(p.x, p.y + 18, 2, '#ffd37a', 45));
+    assembly.applyTransform(physics.body.x, physics.body.y, physics.body.angle);
+    const alt = altitude(physics.body.x, physics.body.y);
+    if (alt > 100000) setMode(GameState.ORBIT);
+    camera.updateZoomByAltitude(alt);
   }
 
-  camera.tickFollow(canvas, physics.state.x, physics.state.y);
-  renderer.updateParticles(dt);
-  const assembly = rocket.getConnectedAssembly();
-  const metrics = physics.computeMetrics(assembly);
-  ui.updateMetrics(metrics);
-  ui.updateTelemetry({
-    state: physics.state,
-    groundHeightAt: physics.groundHeightAt.bind(physics)
+  camera.updateFollow(physics.body.x, physics.body.y, canvas.clientHeight);
+  particles.forEach((p) => { p.life -= 1 / 60; p.x += p.vx / 60; p.y += p.vy / 60; p.vy += 20 / 60; });
+  while (particles.length && particles[0].life <= 0) particles.shift();
+
+  renderBackground();
+  renderWorld();
+
+  const metrics = physics.computeMetrics(attached);
+  renderTelemetry(telemetryEl, {
+    altitude: altitude(physics.body.x, physics.body.y),
+    vx: physics.body.vx,
+    vy: physics.body.vy,
+    accel: Math.hypot(physics.body.ax, physics.body.ay),
+    gForce: physics.gForce,
+    mass: metrics.totalMass,
+    deltaV: metrics.deltaV,
+    twr: metrics.twr,
+    apo: physics.apoapsis,
+    peri: physics.periapsis
   });
-  renderer.render({
-    camera,
-    rocketParts: rocket.getParts(),
-    sim: { state: physics.state, planet: { surfaceGravity: physics.planet.gravity }, groundHeightAt: physics.groundHeightAt.bind(physics) },
-    ghostPart,
-    com: rocket.computeCOM(assembly),
-    cot: calculateCOT(assembly),
-    mode: stateManager.state
-  });
+
   requestAnimationFrame(tick);
 }
 
-emit('state-changed', { prev: null, next: GameState.BUILD_MODE });
+setMode(GameState.BUILD_MODE);
 requestAnimationFrame(tick);
